@@ -1,0 +1,24 @@
+# Maven
+/lru-cache/target/
+/lru-cache/.mvn/
+/lru-cache/.settings/
+/lru-cache/.idea/
+/lru-cache/*.iml
+
+# IntelliJ / VS Code
+*.iml
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Build artifacts
+*.class
+
+# Temporary files
+*~
+*.swp
