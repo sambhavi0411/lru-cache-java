@@ -1,0 +1,245 @@
+Cache Design Understanding:
+
+1. LRU understanding 
+HashMap gives O(1) lookup and doubly linked list maintains access order.
+The important distinction is:
+
+HashMap
+key → Node
+
+gives us direct access to the node.
+The doubly linked list gives us O(1) operations for:
+* Move node to MRU position
+* Remove LRU node
+* Insert node
+So:
+
+get() → O(1)
+put() → O(1)
+eviction → O(1)
+
+That's exactly why HashMap + Doubly Linked List is the classic LRU implementation.
+
+2. Cache 
+
+Request
+   ↓
+Cache
+   ↓ hit
+Return
+
+instead of:
+
+Request
+   ↓
+Database
+   ↓
+Expensive operation every time
+
+And caching isn't only for DB results.
+You can cache:
+* DB data
+* Expensive computations
+* External API responses
+* Frequently accessed configuration
+* Session-related information
+* etc.
+The general principle is:
+Cache data that is expensive to obtain and frequently requested.
+
+3. Local vs Distributed Cache
+Local cache
+
+Server A → Local Cache A
+Server B → Local Cache B
+Server C → Local Cache C
+
+Advantages:
+* Very fast
+* No network hop
+Disadvantages:
+* Each server has a different cache
+* Memory is limited
+* Restart can lose cache
+* Cache consistency becomes difficult
+Distributed cache
+
+Server A ─┐
+Server B ─┼──→ Redis
+Server C ─┘
+
+Now all application servers can access the same cache.
+This is why Redis is commonly used in distributed systems.
+
+4. Cache-Aside 
+
+"Cache aside means deleting the entry."
+❌ Not quite.
+Cache-aside is the overall read/write strategy, not simply cache deletion.
+The read flow is:
+
+Application
+    ↓
+Check Cache
+    ↓
+ ┌───────┐
+ │ Hit?  │
+ └───────┘
+   ↓ YES       ↓ NO
+ Return       DB
+                     ↓
+          Put in Cache
+               ↓
+             Return
+
+That's Cache-Aside / Lazy Loading.
+When updating data, you might combine cache-aside with:
+
+Update DB
+   ↓
+Delete cache entry
+
+But that deletion itself is not what "cache-aside" means.
+Cache-aside defines how the application interacts with the cache; it does not force a single cache-update strategy. The application is responsible for maintaining cache consistency.
+
+5. Write-Through vs Write-Behind
+Cache-Aside
+Application manages both DB and cache.
+
+Application
+   ↓
+Cache
+   ↓ miss
+Database
+
+On write, typically:
+
+Application
+   ↓
+Database
+   ↓
+Delete/Invalidate Cache
+
+The cache is populated later when somebody reads it.
+Memory trick:
+Cache-aside = application goes "aside" to the cache.
+
+6. Write-Through
+Here the application writes to the cache, and the cache synchronously writes to the DB.
+
+Application
+     ↓
+   Cache
+     ↓
+   Database
+
+The important word is:
+Synchronous
+The write isn't considered complete until the DB is updated.
+So:
+
+write()
+  ↓
+Cache
+  ↓
+DB
+  ↓
+success
+
+The cache and DB stay relatively consistent.
+Memory trick:
+Write-through = write goes THROUGH the cache to the DB.
+
+7. Write-Behind
+This is different.
+Application writes to cache:
+
+Application
+     ↓
+   Cache
+     ↓
+   returns quickly
+
+Then the cache asynchronously writes to the database later.
+
+Application
+     ↓
+   Cache
+     ↓
+  async
+     ↓
+ Database
+
+So the application doesn't wait for DB persistence.
+Advantage
+Very fast writes.
+Risk
+If the cache fails before persisting the data:
+
+Application
+     ↓
+Cache
+     X
+
+you could potentially lose the write.
+Memory trick:
+Write-behind = write to cache first, DB catches up behind it.
+
+Notes:
+CACHE-ASIDE
+Application → Cache
+              ↓ miss
+            Database
+
+Application manages cache + DB.
+
+
+WRITE-THROUGH
+Application → Cache → Database
+
+Synchronous DB write.
+
+
+WRITE-BEHIND
+Application → Cache
+                ↓
+              async
+                ↓
+             Database
+
+DB write happens later.
+
+This distinction is very interview-worthy.
+
+
+Part 11 — Here's your first production interview question
+Imagine you have:
+
+User Service
+    ↓
+PostgreSQL
+
+The endpoint:
+
+GET /users/{id}
+
+is receiving 10,000 requests/sec.
+The same 5,000 users are requested repeatedly.
+The database is becoming a bottleneck.
+Interviewer asks:
+"How would you introduce caching?"
+Don't give me a textbook answer.
+Answer as if I am your interviewer.
+Tell me:
+1. Where would you put the cache?
+2. What would the request flow look like?
+3. What would you do on a cache miss?
+4. What happens when user data is updated?
+5. What happens if the cache goes down?
+
+"Since the endpoint is receiving 10,000 requests/sec and many of those requests are repeatedly accessing the same users, I would introduce a distributed cache such as Redis between the User Service and PostgreSQL."
+"For a read request, the User Service would first check Redis using the user ID as the cache key. If the key exists, it's a cache hit, and we can return the cached user directly without hitting PostgreSQL. This reduces both database load and response latency."
+"If it's a cache miss, the User Service would query PostgreSQL, return the result to the client, and populate Redis with the user data, preferably with an appropriate TTL so that stale entries don't remain indefinitely."
+"For updates, PostgreSQL remains my source of truth. I would update PostgreSQL first and then invalidate the corresponding Redis key. On the next read, we'll get a cache miss, fetch the latest value from PostgreSQL, and repopulate Redis. This helps prevent stale data."
+"If Redis goes down, I would make the cache a non-critical dependency. The User Service should fall back to PostgreSQL rather than failing the request. However, because Redis normally protects PostgreSQL from high traffic, I would also protect the database using timeouts, connection-pool limits, circuit breakers and possibly rate limiting, because otherwise a sudden Redis failure could send all 10,000 requests/sec directly to PostgreSQL.
+"So overall, the architecture would be User Service → Redis → PostgreSQL, with Redis acting as a performance layer rather than the source of truth."
